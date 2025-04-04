@@ -1,0 +1,178 @@
+import discord
+from discord.ext import commands
+from mcstatus import JavaServer
+import asyncio
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+import time
+
+# 🔑 KONFIGURACJA
+TOKEN = ""
+MC_SERVER_IP = ""
+MC_SERVER_PORT = 
+CHANNEL_ID = 8  # ID kanału na Discordzie
+
+# 🔑 DANE LOGOWANIA DO ATERNOS (zmień na swoje!)
+ATERNOS_LOGIN = ""
+ATERNOS_PASSWORD = ""
+
+# 🎮 INICJALIZACJA BOTA
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+# 🟢 KOMENDA !status – Sprawdza status serwera
+@bot.command()
+async def status(ctx):
+    try:
+        server = JavaServer.lookup(f"{MC_SERVER_IP}:{MC_SERVER_PORT}")
+        status = server.status()
+
+        player_names = ", ".join(player.name for player in status.players.sample) if status.players.sample else "Brak graczy online"
+
+        embed = discord.Embed(
+            title=f"🎮 **Status serwera: {MC_SERVER_IP}**",
+            description="Poniżej szczegóły na temat serwera Minecraft.",
+            color=discord.Color.blue()
+        )
+        embed.set_thumbnail(url="https://i.imgur.com/IkN2wWn.png")  # Tutaj dodajemy ikonę (zmień link, jeśli chcesz inny)
+        embed.add_field(name="📊 Gracze online", value=f"{status.players.online}/{status.players.max}", inline=False)
+        embed.add_field(name="👥 Lista graczy", value=player_names, inline=False)
+        embed.add_field(name="📶 Ping", value=f"{status.latency} ms", inline=False)
+        embed.set_footer(text="Bot Minecraft Status | mcstatus API", icon_url="https://i.imgur.com/IkN2wWn.png")
+
+        await ctx.send(embed=embed)
+    except Exception as e:
+        await ctx.send("❌ **Nie udało się pobrać statusu serwera!**")
+        print(f"🔴 Błąd: {e}")
+
+# 🔄 KOMENDA !gracze – Liczba graczy i ich nazwy
+@bot.command()
+async def gracze(ctx):
+    try:
+        server = JavaServer.lookup(f"{MC_SERVER_IP}:{MC_SERVER_PORT}")
+        status = server.status()
+
+        player_count = status.players.online
+        player_list = "\n".join(player.name for player in status.players.sample) if status.players.sample else "Brak graczy online"
+
+        embed = discord.Embed(
+            title="👥 **Gracze online**",
+            description=f"Obecnie na serwerze {MC_SERVER_IP} znajdują się następujący gracze:",
+            color=discord.Color.green()
+        )
+        embed.set_thumbnail(url="https://i.imgur.com/IkN2wWn.png")  # Dodanie ikony
+        embed.add_field(name="📊 Liczba graczy", value=str(player_count), inline=False)
+        embed.add_field(name="👥 Lista graczy", value=player_list, inline=False)
+        embed.add_field(name="📌 IP serwera", value=MC_SERVER_IP, inline=False)
+
+        await ctx.send(embed=embed)
+    except Exception as e:
+        await ctx.send("❌ **Nie udało się pobrać listy graczy!**")
+        print(f"🔴 Błąd: {e}")
+
+# 🔔 KOMENDA !ping – Opóźnienie bota
+@bot.command()
+async def ping(ctx):
+    latency = round(bot.latency * 1000)  # Konwersja na ms
+    embed = discord.Embed(
+        title="🏓 **Pong!**",
+        description=f"Opóźnienie bota wynosi `{latency} ms`",
+        color=discord.Color.purple()
+    )
+    embed.set_footer(text="Sprawdzanie opóźnienia bota")
+    await ctx.send(embed=embed)
+
+# 🔄 KOMENDA !start – Uruchamianie serwera na Aternos
+@bot.command()
+async def start(ctx):
+    await ctx.send("🟢 Próba uruchomienia serwera na Aternos...")
+
+    try:
+        options = webdriver.ChromeOptions()
+        options.add_argument("--headless")  # Tryb bez GUI
+        driver = webdriver.Chrome(options=options)
+
+        driver.get("https://aternos.org/go/")
+        time.sleep(3)
+
+        # Logowanie
+        driver.find_element(By.NAME, "user").send_keys(ATERNOS_LOGIN)
+        driver.find_element(By.NAME, "password").send_keys(ATERNOS_PASSWORD, Keys.RETURN)
+        time.sleep(5)
+
+        driver.get("https://aternos.org/server/")
+        time.sleep(3)
+
+        # Kliknięcie "Start"
+        start_button = driver.find_element(By.XPATH, "//button[contains(text(), 'Start')]")
+        start_button.click()
+
+        await ctx.send("✅ **Serwer jest uruchamiany!** Może to potrwać kilka minut...")
+        driver.quit()
+
+    except Exception as e:
+        await ctx.send("❌ **Nie udało się uruchomić serwera!**")
+        print(f"🔴 Błąd: {e}")
+
+# 🔄 AUTOMATYCZNE SPRAWDZANIE SERWERA
+server_was_online = False
+last_players = set()
+
+async def check_server_status():
+    global server_was_online, last_players
+    await bot.wait_until_ready()
+    channel = bot.get_channel(CHANNEL_ID)
+
+    while not bot.is_closed():
+        try:
+            server = JavaServer.lookup(f"{MC_SERVER_IP}:{MC_SERVER_PORT}")
+            status = server.status()
+
+            # 🔔 Powiadomienie, jeśli serwer się włączył
+            if not server_was_online:
+                embed = discord.Embed(
+                    title="🟢 **Serwer jest ONLINE!** 🎉",
+                    description="Serwer Minecraft jest teraz dostępny.",
+                    color=discord.Color.green()
+                )
+                embed.set_thumbnail(url="https://i.imgur.com/IkN2wWn.png")
+                await channel.send(embed=embed)
+                server_was_online = True  
+
+            # 👥 Sprawdzanie listy graczy
+            current_players = {p.name for p in status.players.sample} if status.players.sample else set()
+            new_players = current_players - last_players
+            for player in new_players:
+                embed = discord.Embed(
+                    title=f"👋 **{player} dołączył do serwera!**",
+                    description="Nowy gracz dołączył do zabawy!",
+                    color=discord.Color.orange()
+                )
+                embed.set_thumbnail(url="https://i.imgur.com/IkN2wWn.png")
+                await channel.send(embed=embed)
+
+            last_players = current_players
+
+        except:
+            # 🔴 Powiadomienie, jeśli serwer się wyłączył
+            if server_was_online:
+                embed = discord.Embed(
+                    title="🔴 **Serwer jest OFFLINE!** 🚨",
+                    description="Serwer Minecraft jest wyłączony.",
+                    color=discord.Color.red()
+                )
+                embed.set_thumbnail(url="https://i.imgur.com/IkN2wWn.png")
+                await channel.send(embed=embed)
+                server_was_online = False
+
+        await asyncio.sleep(300)  # Sprawdzanie co 5 minut
+
+# 🔥 URUCHOMIENIE BOTA
+@bot.event
+async def on_ready():
+    print(f"✅ Bot zalogowany jako {bot.user}")
+    bot.loop.create_task(check_server_status())
+
+bot.run(TOKEN)
